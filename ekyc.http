@@ -1,0 +1,6 @@
+@ekyc_HostAddress = http://localhost:5132
+
+GET {{ekyc_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
