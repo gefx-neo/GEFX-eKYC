@@ -1,0 +1,213 @@
+ public String SubmitBen()
+ {
+     //beneficiary
+     string connString = Configuration.GetConnectionString("myDb1");
+     string userRequest = "";
+     using (SqlConnection myConnection = new SqlConnection(connString))
+     {
+         string oString = "SELECT rem_id, b.BeneficiaryFullName,b.BeneficiaryType,c.Name country FROM eKYCRemit a, RemittanceOrders b,Countries c WHERE status=0 AND a.rem_id=b.ID and b.BeneficiaryBankCountry=c.ID";
+         SqlCommand oCmd = new SqlCommand(oString, myConnection);
+         //oCmd.Parameters.AddWithValue("@Fname", fName);
+         myConnection.Open();
+         TokenController tk = new TokenController();
+         string token = tk.GetTokenDemo();
+
+         List<beneficiary> benlist = new List<beneficiary>();
+         List<corp_beneficiary> corp_benlist = new List<corp_beneficiary>();
+
+         using (SqlDataReader oReader = oCmd.ExecuteReader())
+         {
+             while (oReader.Read())
+             {
+                 if (oReader["BeneficiaryType"].ToString() == "business")
+                 {
+                     corp_beneficiary ben_corp = new corp_beneficiary();
+                     corp_beneficiary.corp_particulars ben_corp_part = new corp_beneficiary.corp_particulars();
+                     corp_beneficiary.corp_others ben_corp_other = new corp_beneficiary.corp_others();
+
+                     ben_corp.profileReferenceId = "ben" + oReader["rem_id"].ToString();
+                     ben_corp_part.countryOfIncorporation = oReader["country"].ToString().ToUpper() ?? "SINGAPORE";
+                     ben_corp_part.countryOfOperation = new List<string>() { oReader["country"].ToString().ToUpper() ?? "SINGAPORE" };
+                     ben_corp_part.name = oReader["BeneficiaryFullName"].ToString().ToUpper() ?? "0";
+
+                     ben_corp.particular = ben_corp_part;
+                     ben_corp.other = ben_corp_other;
+                     corp_benlist.Add(ben_corp);
+                 }
+                 else
+                 {
+                     beneficiary ben = new beneficiary();
+                     beneficiary.others ben_others = new beneficiary.others();
+                     beneficiary.particulars ben_part = new beneficiary.particulars();
+
+                     ben.profileReferenceId = "ben" + oReader["rem_id"].ToString() ;
+                     ben_part.nationality = new List<string>() { oReader["country"].ToString().ToUpper() ?? "SINGAPORE" };
+                     ben_part.name = oReader["BeneficiaryFullName"].ToString().ToUpper() ?? "0";
+                     ben_part.countryOfResidence = oReader["country"].ToString().ToUpper() ?? "SINGAPORE";
+
+                     ben.particular = ben_part;
+                     ben.other = ben_others;
+                     benlist.Add(ben);
+                 }
+             }
+         }
+         myConnection.Close();
+
+         for (int i = 0; i < benlist.Count; i++)
+         {
+             userRequest = JsonConvert.SerializeObject(benlist[i]);
+             myConnection.Open(); int cust_id = 0;
+             String query = "INSERT INTO ResApi (result) VALUES (@res)";
+
+             using (SqlCommand command = new SqlCommand(query, myConnection))
+             {
+                 command.Parameters.AddWithValue("@res", userRequest + "*** ben");
+                 command.ExecuteNonQuery();
+             }
+             myConnection.Close();
+
+             using (HttpClient client = new HttpClient())
+             {
+                 //var baseAddress = "http://localhost:5132";                       
+                 var url = "/api/customer/";
+
+                 var contentType = new ContentType("application/json");
+
+                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                 client.DefaultRequestHeaders.Add("X-Domain-ID", "174");
+
+                 var contentData = new StringContent(userRequest, Encoding.UTF8, "application/json");
+                 var response = client.PostAsync(Api.baseAddress + url, contentData).Result;
+
+                 var stringData = ""; int status = 2;
+
+                 stringData = response.Content.ReadAsStringAsync().Result;
+                 if (!response.IsSuccessStatusCode)
+                 {
+                     status = 3;
+                 }
+
+                 myConnection.Open();
+                 query = "INSERT INTO ResApi (result,status) VALUES (@res,@status)";
+                 using (SqlCommand command = new SqlCommand(query, myConnection))
+                 {
+                     command.Parameters.AddWithValue("@res", stringData);
+                     command.Parameters.AddWithValue("@status", status);
+                     command.ExecuteNonQuery();
+                 }
+                 myConnection.Close();
+
+                 if (status == 2) status = 1;
+                 //{
+                     using (JsonTextReader reader = new JsonTextReader(new StringReader(stringData)))
+                     {
+                         JsonSerializer serializer = new JsonSerializer();
+                         Resp data = serializer.Deserialize<Resp>(reader);
+
+                         cust_id = data.id;
+                         //custid = custid == 0 ? int.Parse(listCustomer[i].customer.profileReferenceId) : custid;
+                         myConnection.Open();
+                         query = "UPDATE eKYCRemit SET status=@stat,Artemis_custId=@custid WHERE rem_id=@id";
+                         using (SqlCommand command = new SqlCommand(query, myConnection))
+                         {
+                             command.Parameters.AddWithValue("@id", int.Parse(benlist[i].profileReferenceId.Remove(0,3)));
+                             command.Parameters.AddWithValue("@custid", cust_id);
+                             command.Parameters.AddWithValue("@stat", status); 
+                             command.ExecuteNonQuery();
+                         }
+                         myConnection.Close();
+                     //}
+
+                     //using (HttpClient client = new HttpClient())
+                     //{
+                     //var baseAddress = "http://localhost:5132";                       
+                     //var url = "/api/customer/";
+
+                     //var contentType = new ContentType("application/json");
+
+                     //client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                     //client.DefaultRequestHeaders.Add("X-Domain-ID", "174");
+                     url = "/api/customer/" + cust_id + "/screen?includeCrp=true&onlyUpdated=false";
+                     response = client.PostAsync(Api.baseAddress + url, null).Result;
+
+                     //stringData = ""; status = 2;
+
+                     stringData = response.Content.ReadAsStringAsync().Result;
+                     //}
+                 }
+             }
+         }
+
+         for (int i = 0; i < corp_benlist.Count; i++)
+         {
+             userRequest = JsonConvert.SerializeObject(corp_benlist[i]);
+             myConnection.Open();
+             String query = "INSERT INTO ResApi (result) VALUES (@res)";
+
+             using (SqlCommand command = new SqlCommand(query, myConnection))
+             {
+                 command.Parameters.AddWithValue("@res", userRequest + "*** ben");
+                 command.ExecuteNonQuery();
+             }
+             myConnection.Close();
+
+             using (HttpClient client = new HttpClient())
+             {
+                 //var baseAddress = "http://localhost:5132";                       
+                 var url = "/api/customer/";
+
+                 var contentType = new ContentType("application/json");
+
+                 client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                 client.DefaultRequestHeaders.Add("X-Domain-ID", "174");
+
+                 var contentData = new StringContent(userRequest, Encoding.UTF8, "application/json");
+                 var response = client.PostAsync(Api.baseAddress + url, contentData).Result;
+
+                 var stringData = ""; int status = 2;
+
+                 stringData = response.Content.ReadAsStringAsync().Result;
+                 if (!response.IsSuccessStatusCode)
+                 {
+                     status = 3;
+                 }
+
+                 myConnection.Open();
+                 query = "INSERT INTO ResApi (result,status) VALUES (@res,@status)";
+                 using (SqlCommand command = new SqlCommand(query, myConnection))
+                 {
+                     command.Parameters.AddWithValue("@res", stringData);
+                     command.Parameters.AddWithValue("@status", status);
+                     command.ExecuteNonQuery();
+                 }
+                 myConnection.Close();
+
+                 if (status == 2) status = 1;
+                 //{
+                     using (JsonTextReader reader = new JsonTextReader(new StringReader(stringData)))
+                     {
+                         JsonSerializer serializer = new JsonSerializer();
+                         Resp data = serializer.Deserialize<Resp>(reader);
+
+                         int cust_id = data.id;
+                         //custid = custid == 0 ? int.Parse(listCustomer[i].customer.profileReferenceId) : custid;
+                         myConnection.Open();
+                         query = "UPDATE eKYCRemit SET status=@stat,Artemis_custId=@custid WHERE rem_id=@id";
+                         using (SqlCommand command = new SqlCommand(query, myConnection))
+                         {
+                             command.Parameters.AddWithValue("@id", int.Parse(corp_benlist[i].profileReferenceId.Remove(0,3)));
+                             command.Parameters.AddWithValue("@custid", cust_id);
+                             command.Parameters.AddWithValue("@stat", status);
+                             command.ExecuteNonQuery();
+                         }
+                         myConnection.Close();
+                         url = "/api/customer/" + cust_id + "/screen?includeCrp=true&onlyUpdated=false";
+                         contentData = new StringContent(userRequest, Encoding.UTF8, "application/json");
+                         response = client.PostAsync(Api.baseAddress + url, contentData).Result;
+                     }
+                 //}
+             }
+         }
+     }
+     return "successful";
+ }
